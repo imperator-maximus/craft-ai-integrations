@@ -135,7 +135,11 @@ On one Windows machine (i5-12600KF, RTX 3090 Ti), release:
   transparent-background's own code on a synthetic 384² input. Worst relative difference over the
   stages 3.2e-5 on the processor and 2.4e-4 on the graphics card; no pixel of the prediction
   changes side at 0.5.
-- **The shared conformance suite** (`check_runner`) on a tiny network saved as `.bpk`.
+- **The shared conformance suite** (`check_runner`) on the runner's request handling and pipeline
+  around a stand-in for the network, as the SAM 2.1 tests here do. The network itself, a tiny one
+  saved as `.bpk`, runs through load and run in an ignored test on the processor, in release (about
+  4 s). Unoptimised, Burn's processor backend takes minutes for it, and a build server's software
+  renderer is too slow and, on Linux (lavapipe), fails.
 - **The whole runner on a real photo**, against the same port inside PhotoCraft (which runs it
   through the same pipeline): on a 3101 × 1613 PNG the two masks are identical, byte for byte. On a
   JPEG they differ by 0.003 on average (IoU 0.994), from the two JPEG decoders.
@@ -156,6 +160,8 @@ CRAFT_TEST_INSPYRENET_WEIGHTS=<inspyrenet.safetensors> CRAFT_TEST_INSPYRENET_REF
 CRAFT_TEST_INSPYRENET_WEIGHTS=<inspyrenet.safetensors> CRAFT_TEST_INSPYRENET_IMAGE=<photo> CRAFT_TEST_INSPYRENET_OUT=<mask.png>   cargo test --release -p craft-ai-engine-burn -j 8 --lib removes_the_background -- --ignored --nocapture
 # Two apps through the shared client, from the catalogue's route
 CRAFT_TEST_INSPYRENET_WEIGHTS=<inspyrenet.safetensors> CRAFT_TEST_INSPYRENET_IMAGE=<photo.png>   cargo test --release -p craft-ai-client --features burn --test burn_matte -- --ignored --nocapture
+# The tiny network through load and run, on the processor
+cargo test --release -p craft-ai-engine-burn --lib tiny_network -- --ignored
 python tools/mutation/mutation_check.py be inspyrenet
 python tools/mutation/mutation_check.py bo
 ```
@@ -164,6 +170,10 @@ python tools/mutation/mutation_check.py bo
 
 - **Graphics card advice.** The route is not marked quick on the processor, so engine advice
   calls it slow on a computer without a card the engine can use.
+- **A software renderer counts as a card.** The engine takes the graphics card when one answers,
+  and a software renderer (lavapipe, WARP) answers too. On CI the network was far slower there and
+  failed on lavapipe; the failure comes back as an error, not a crash. The same choice serves SAM
+  2.1 on this engine. `CRAFT_AI_BURN_DEVICE=cpu` forces the processor.
 - **The processor is slow.** The fallback runs on Burn's `ndarray` backend, which this crate
   builds without its `multi-threads` and `simd` features, so it uses one core. The same network on
   one core took about 230 s a picture in PhotoCraft (its `flex` backend), about 35 s with four

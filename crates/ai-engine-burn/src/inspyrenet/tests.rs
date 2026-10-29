@@ -1,17 +1,18 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use burn::prelude::*;
 use burn_store::{BurnpackStore, ModuleSnapshot};
-use craft_ai_core::{CapabilityId, ErrorKind, InputRole, Payload, Request};
-use craft_ai_engine::testing::check_runner_paced;
-use craft_ai_engine::{ModelRunner, RunContext};
+use craft_ai_core::{AiError, CapabilityId, ErrorKind, InputRole, ModelInfo, Payload, Request};
+use craft_ai_engine::testing::check_runner;
+use craft_ai_engine::{LoadedModel, ModelRunner, RunContext};
 use craft_ai_engine_rten::picture::{decode_picture, encode_mask};
+use craft_ai_features::GpuVendor;
 
 use super::net::InSPyReNet;
 use super::net::swin::SwinConfig;
-use super::{InspyrenetRunner, on_big_stack, weights};
+use super::pipeline::Input;
+use super::{InspyrenetRunner, Loaded, Predict, on_big_stack, weights};
 
 /// A Swin backbone small enough to build, save and run in a test.
 const TINY: SwinConfig = SwinConfig {
@@ -40,8 +41,12 @@ fn tiny_weights(dir: &Path) -> PathBuf {
     path
 }
 
+/// The tiny network's runner, on the processor whatever graphics the computer has.
 fn tiny_runner() -> Arc<dyn ModelRunner> {
-    Arc::new(InspyrenetRunner { backbone: TINY })
+    Arc::new(InspyrenetRunner {
+        backbone: TINY,
+        device: processor,
+    })
 }
 
 /// A request for `image.matte` with a gray `w × h` PNG.
@@ -68,42 +73,104 @@ fn the_runner_describes_an_image_matte_from_one_picture() {
     );
 }
 
+/// Stands in for the network: the left half of the network's input is the subject.
+struct LeftHalf;
+
+impl Predict for LeftHalf {
+    fn predict(&self, input: &Input, _: &RunContext) -> Result<Vec<f32>, AiError> {
+        Ok((0..input.width * input.height)
+            .map(|i| {
+                if i % input.width < input.width / 2 {
+                    1.0
+                } else {
+                    0.0
+                }
+            })
+            .collect())
+    }
+}
+
+/// The real runner's description and request handling around [`LeftHalf`], whatever file is
+/// named: the network itself is far too slow for these tests in an unoptimised build.
+struct StandIn;
+
+impl ModelRunner for StandIn {
+    fn engine(&self) -> &str {
+        crate::runner::ENGINE
+    }
+    fn model(&self) -> ModelInfo {
+        InspyrenetRunner::new().model()
+    }
+    fn accelerators(&self) -> &[GpuVendor] {
+        &super::CARDS
+    }
+    fn load(&self, _: &Path) -> Result<Box<dyn LoadedModel>, AiError> {
+        Ok(Box::new(Loaded::new(Box::new(LeftHalf))))
+    }
+}
+
+/// The mask PNG of a run's one output, after checking that there is exactly one.
+fn one_mask(out: &[craft_ai_core::Output]) -> craft_ai_engine_rten::picture::Rgb {
+    assert_eq!(out.len(), 1);
+    let Payload::Inline { media_type, data } = &out[0].payload else {
+        panic!("not inline");
+    };
+    assert_eq!(media_type.as_str(), "image/png");
+    decode_picture(data).unwrap()
+}
+
 #[test]
 fn passes_the_shared_engine_checks() {
     let dir = tempfile::tempdir().unwrap();
-    let weights = tiny_weights(dir.path());
+    let weights = dir.path().join("inspyrenet.safetensors");
+    std::fs::write(&weights, b"x").unwrap();
     let bad = Request::new(CapabilityId::parse("image.matte").unwrap());
-    check_runner_paced(
-        tiny_runner(),
+    check_runner(
+        Arc::new(StandIn),
         &weights,
         &request(40, 30),
         &bad,
         ErrorKind::InvalidRequest,
-        Duration::from_millis(20),
     )
     .unwrap();
 }
 
 #[test]
 fn answers_one_mask_at_the_pictures_size() {
+    let mut model = StandIn.load(Path::new("unused")).unwrap();
+    let mask = one_mask(
+        &model
+            .run(&request(50, 20), &RunContext::detached())
+            .unwrap(),
+    );
+    assert_eq!((mask.width, mask.height), (50, 20));
+    // The subject is the left half: white there, black on the right after the fringe shrink.
+    let at = |x: usize| mask.bytes[3 * x];
+    assert!(at(5) > 200 && at(45) < 50, "{} {}", at(5), at(45));
+}
+
+/// The tiny network itself, through load and run on the processor. Ignored because Burn's
+/// processor backend is very slow without optimisation; run it in release.
+#[test]
+#[ignore = "slow in an unoptimised build: cargo test --release -p craft-ai-engine-burn --lib tiny_network -- --ignored"]
+fn the_tiny_network_answers_one_mask_at_the_pictures_size() {
     let dir = tempfile::tempdir().unwrap();
     let mut model = tiny_runner().load(&tiny_weights(dir.path())).unwrap();
-    let out = model
-        .run(&request(50, 20), &RunContext::detached())
-        .unwrap();
-    assert_eq!(out.len(), 1);
-    let Payload::Inline { media_type, data } = &out[0].payload else {
-        panic!("not inline");
-    };
-    assert_eq!(media_type.as_str(), "image/png");
-    let mask = decode_picture(data).unwrap();
+    let mask = one_mask(
+        &model
+            .run(&request(50, 20), &RunContext::detached())
+            .unwrap(),
+    );
     assert_eq!((mask.width, mask.height), (50, 20));
 }
 
 #[test]
 fn files_that_are_not_the_checkpoint_are_refused_in_words() {
     let dir = tempfile::tempdir().unwrap();
-    let runner = InspyrenetRunner::new();
+    let runner = InspyrenetRunner {
+        device: processor,
+        ..InspyrenetRunner::new()
+    };
     let missing = runner
         .load(&dir.path().join("inspyrenet.safetensors"))
         .err()

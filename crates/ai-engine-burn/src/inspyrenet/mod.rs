@@ -58,6 +58,9 @@ const CARDS: [GpuVendor; 4] = [
 pub struct InspyrenetRunner {
     /// The backbone size: Swin-B for the published checkpoint, a tiny one in tests.
     backbone: SwinConfig,
+    /// Where a load puts the network: the graphics card when one answers, the processor in tests
+    /// (a build server's software renderer answers too, and is far too slow for them).
+    device: fn() -> Device,
 }
 
 impl InspyrenetRunner {
@@ -65,6 +68,7 @@ impl InspyrenetRunner {
     pub const fn new() -> Self {
         Self {
             backbone: SwinConfig::BASE,
+            device: pick_device,
         }
     }
 }
@@ -124,16 +128,17 @@ impl ModelRunner for InspyrenetRunner {
             ));
         }
         let backbone = self.backbone;
+        let pick = self.device;
         let path = weights.to_path_buf();
         let loaded = on_big_stack(move || {
-            let device = pick_device();
+            let device = pick();
             let net = weights::fill(InSPyReNet::with_backbone(backbone, &device), &path)?;
-            Ok(Loaded {
+            Ok(Network {
                 net: Box::new(net),
                 device,
             })
         })?;
-        Ok(Box::new(loaded))
+        Ok(Box::new(Loaded::new(Box::new(loaded))))
     }
 }
 
@@ -143,14 +148,20 @@ fn model_id() -> ModelId {
     ModelId::new(MODEL).expect("inspyrenet is a valid model id")
 }
 
+/// What the pipeline asks for a picture: the foreground probability of `input`, one value per
+/// pixel. The network answers it; tests give a stand-in, as the SAM 2.1 tests here do.
+trait Predict: Send {
+    fn predict(&self, input: &Input, ctx: &RunContext) -> Result<Vec<f32>, AiError>;
+}
+
 /// InSPyReNet with its weights, on the device they were loaded to.
-struct Loaded {
+struct Network {
     /// Boxed: the module tree is a few hundred kilobytes by value.
     net: Box<InSPyReNet>,
     device: Device,
 }
 
-impl Loaded {
+impl Network {
     /// `input` as the network's normalised `[1, 3, H, W]` tensor.
     fn tensor(&self, input: &Input) -> Tensor<4> {
         let (w, h) = (input.width, input.height);
@@ -164,7 +175,9 @@ impl Loaded {
         }
         Tensor::from_data(TensorData::new(planar, [1, 3, h, w]), &self.device)
     }
+}
 
+impl Predict for Network {
     /// The network's foreground probability for `input`, one value per pixel.
     fn predict(&self, input: &Input, ctx: &RunContext) -> Result<Vec<f32>, AiError> {
         let ctx = ctx.clone();
@@ -174,13 +187,28 @@ impl Loaded {
                 .net
                 .forward(self.tensor(input), &cancelled)
                 .ok_or_else(AiError::cancelled)?;
-            pred.into_data().try_to_vec::<f32>().map_err(|_| {
-                AiError::new(
-                    ErrorKind::Internal,
-                    "The background remover's answer was unreadable.",
-                )
-            })
+            // A device that fails while running reports it here; `into_data` would panic.
+            pred.try_into_data()
+                .ok()
+                .and_then(|data| data.try_to_vec::<f32>().ok())
+                .ok_or_else(|| {
+                    AiError::new(
+                        ErrorKind::Internal,
+                        "The background remover's answer was unreadable.",
+                    )
+                })
         })
+    }
+}
+
+/// A loaded model: the any-size pipeline around whatever predicts.
+struct Loaded {
+    predict: Box<dyn Predict>,
+}
+
+impl Loaded {
+    fn new(predict: Box<dyn Predict>) -> Self {
+        Self { predict }
     }
 }
 
@@ -216,7 +244,7 @@ impl LoadedModel for Loaded {
             picture,
             MAX_RES,
             SHRINK,
-            &mut |input| self.predict(input, ctx),
+            &mut |input| self.predict.predict(input, ctx),
             ctx,
         )?;
         ctx.check_cancelled()?;
