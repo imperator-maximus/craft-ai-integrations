@@ -1,4 +1,4 @@
-# The Burn engine (SAM 2.1, optional)
+# The Burn engine (SAM 2.1 and InSPyReNet, optional)
 
 `craft-ai-engine-burn` runs SAM 2.1 tiny for `image.segment` through Burn, on a graphics card when
 one answers and on the processor when none does. It is a choice beside rten, never the default:
@@ -88,3 +88,71 @@ python tools/mutation/mutation_check.py be
   without tracking every value that passes between the halves. No file is 700 lines or more.
 - Progress and Cancel during the first preparation: `load` has neither, so the app shows its own
   busy state until the first selection returns.
+
+## InSPyReNet for `image.matte`
+
+The second model on this engine: `inspyrenet` (engine `burn`), the subject's soft alpha for
+Remove background, from the picture alone. It is not SAM: no clicks, no box, no prompt.
+
+| Piece | Where |
+|---|---|
+| Runner, request and answer | `src/inspyrenet/mod.rs`: a PNG or JPEG `source` in, one grayscale PNG at the picture's size out (white is the subject, soft along hair and fur) |
+| The network | `src/inspyrenet/net/`: InSPyReNet with the Swin-B backbone (T. Kim et al., ACCV 2022), **written by hand** in Burn after the MIT-licensed reference code (plemeri/InSPyReNet, as packaged by transparent-background). Module names follow the PyTorch keys, so the checkpoint loads by name |
+| Weights | `src/inspyrenet/weights.rs`: the `.safetensors` checkpoint read with Burn's PyTorch adapter (linear weights transposed as they load); a load that leaves any weight unset, fails one, or finds a tensor this network does not have is refused in plain words |
+| Any picture size | `src/inspyrenet/pipeline/`: full resolution up to 1280 pixels on the long side (reflect-padded to a multiple of 32); above that, reflect-padded to a square, reduced with antialiased Lanczos-3 to 1280², the matte enlarged back and, below half scale, refined at full resolution with a colour guided filter (He et al., PAMI 2013) on the tiles near the edge; then a 0.2 fringe shrink. The approach of the Gyre background remover |
+
+Unlike SAM 2.1 here, nothing is generated and nothing is prepared on the computer: the runner
+reads the checkpoint file as downloaded.
+
+### The weights file
+
+`inspyrenet.safetensors` from [1038lab/inspyrenet](https://huggingface.co/1038lab/inspyrenet) at
+revision `0f5946638dcbc7dbc1e56306b823959958ac0ae0`: 367,120,444 bytes, SHA-256
+`5c8ab4541f9a960b376a80362b07f1d96262e689c501365e6323faa958de47ea`. It is a format conversion
+with no model card of its own. On 29/10/2026 it was checked tensor for tensor (all 1,625 identical)
+against the author's own checkpoint, `ckpt_base.pth` (InSPyReNet Swin-B Plus Ultra, MIT) at
+[plemeri/InSPyReNet](https://huggingface.co/plemeri/InSPyReNet) revision
+`d94c2baaa4d023ab018c6f97be6ef37548e3bd1f`: 367,520,613 bytes, SHA-256
+`0a6fe2a73ab0532d6d0b8d82849a9760a226df719e3063d09b4149ece6f80fcd`, the file transparent-background
+downloads. The author's file is not used directly because it is a pickle (`.pth`), and a local
+connection takes only `.safetensors`, `.onnx` or `.bpk` weights.
+
+### What was run
+
+On one Windows machine (i5-12600KF, RTX 3090 Ti), release:
+
+- **Parity with PyTorch** (`src/inspyrenet/parity.rs`): every stage of the network (patch
+  embedding, four Swin stages, the saliency and Laplacian pyramids, the prediction) against
+  transparent-background's own code on a synthetic 384² input. Worst relative difference over the
+  stages 3.2e-5 on the processor and 2.4e-4 on the graphics card; no pixel of the prediction
+  changes side at 0.5.
+- **The shared conformance suite** (`check_runner`) on a tiny network saved as `.bpk`.
+- **The whole runner on a real photo**, against the same port inside PhotoCraft (which runs it
+  through the same pipeline): on a 3101 × 1613 PNG the two masks are identical, byte for byte. On a
+  JPEG they differ by 0.003 on average (IoU 0.994), from the two JPEG decoders.
+- Not measured cleanly: the time per picture. During these runs another program held about 20 GB of
+  the card's memory and the PhotoCraft port slowed down just as much (about 20 s a picture instead
+  of about 2.5 s). No run on macOS or Linux, and no app has run it through the shared binding yet.
+
+```sh
+# The PyTorch reference, once (Python with torch, safetensors and transparent-background)
+python tools/burn/inspyrenet_reference.py <inspyrenet.safetensors> <inspyrenet-ref-384.safetensors>
+# Then the parity and weight tests, release
+CRAFT_TEST_INSPYRENET_WEIGHTS=<inspyrenet.safetensors> CRAFT_TEST_INSPYRENET_REFERENCE=<inspyrenet-ref-384.safetensors>   cargo test --release -p craft-ai-engine-burn -j 8 --lib inspyrenet -- --include-ignored --nocapture
+# One photo through the runner, the mask written out
+CRAFT_TEST_INSPYRENET_WEIGHTS=<inspyrenet.safetensors> CRAFT_TEST_INSPYRENET_IMAGE=<photo> CRAFT_TEST_INSPYRENET_OUT=<mask.png>   cargo test --release -p craft-ai-engine-burn -j 8 --lib removes_the_background -- --ignored --nocapture
+python tools/mutation/mutation_check.py be inspyrenet
+```
+
+### Limits to know
+
+- **No catalogue recipe yet.** `remove-background` still has no local recipe. A recipe here always
+  names a ComfyUI workflow, with built-in runtimes beside it; one that is built in only is a
+  catalogue question for the maintainers, so it is not guessed in this change. Until then the model
+  is reached through a local connection that names the weights file.
+- **The processor is slow.** The fallback runs on Burn's `ndarray` backend, which this crate
+  builds without its `multi-threads` and `simd` features, so it uses one core. The same network on
+  one core took about 230 s a picture in PhotoCraft (its `flex` backend), about 35 s with four
+  threads and SIMD. The graphics card is the point of this runner.
+- The parity reference is made by `tools/burn/inspyrenet_reference.py`, which needs Python with
+  PyTorch and transparent-background.
