@@ -77,7 +77,7 @@ fn the_runner_describes_an_image_matte_from_one_picture() {
 struct LeftHalf;
 
 impl Predict for LeftHalf {
-    fn predict(&self, input: &Input, _: &RunContext) -> Result<Vec<f32>, AiError> {
+    fn predict(&mut self, input: &Input, _: &RunContext) -> Result<Vec<f32>, AiError> {
         Ok((0..input.width * input.height)
             .map(|i| {
                 if i % input.width < input.width / 2 {

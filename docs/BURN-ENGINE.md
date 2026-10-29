@@ -145,7 +145,7 @@ On one Windows machine (i5-12600KF, RTX 3090 Ti), release:
   JPEG they differ by 0.003 on average (IoU 0.994), from the two JPEG decoders.
 - **Through the shared client** (`crates/ai-client/tests/burn_matte.rs`): the launcher sets up the
   catalogue's built-in route with the real file, then two app ids ask `AiClient` for Remove
-  background only and each gets one grayscale mask at the picture's size (the 3101 × 1613 PNG). A
+  background only and each gets one grayscale mask at the picture's size (a 2848 × 4272 PNG). A
   file that is not the checkpoint is refused in words that point to Set up AI.
 - Not measured cleanly: the time per picture. During these runs another program held about 20 GB of
   the card's memory and the PhotoCraft port slowed down just as much (about 20 s a picture instead
@@ -172,8 +172,10 @@ python tools/mutation/mutation_check.py bo
   calls it slow on a computer without a card the engine can use.
 - **A software renderer counts as a card.** The engine takes the graphics card when one answers,
   and a software renderer (lavapipe, WARP) answers too. On CI the network was far slower there and
-  failed on lavapipe; the failure comes back as an error, not a crash. The same choice serves SAM
-  2.1 on this engine. `CRAFT_AI_BURN_DEVICE=cpu` forces the processor.
+  failed on lavapipe. So the first failure on a card that is not a cancel builds the network again
+  on the processor from the same file, runs that picture again there with a notice, and stays on
+  the processor (`src/inspyrenet/fallback.rs`). SAM 2.1 on this engine makes the same choice of
+  device without that move. `CRAFT_AI_BURN_DEVICE=cpu` forces the processor from the start.
 - **The processor is slow.** The fallback runs on Burn's `ndarray` backend, which this crate
   builds without its `multi-threads` and `simd` features, so it uses one core. The same network on
   one core took about 230 s a picture in PhotoCraft (its `flex` backend), about 35 s with four

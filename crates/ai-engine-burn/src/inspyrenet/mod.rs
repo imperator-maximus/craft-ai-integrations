@@ -11,6 +11,7 @@
 //! - **Answer**: one grayscale PNG at the picture's size, white where the subject is, with soft
 //!   values along its edge (hair, fur).
 
+mod fallback;
 mod net;
 mod pipeline;
 mod weights;
@@ -27,7 +28,8 @@ use craft_ai_engine::{LoadedModel, ModelRunner, RunContext};
 use craft_ai_engine_rten::picture::{decode_picture, encode_mask};
 use craft_ai_features::GpuVendor;
 
-use crate::backend::pick_device;
+use crate::backend::{pick_device, processor};
+use fallback::WithFallback;
 use net::InSPyReNet;
 use net::swin::SwinConfig;
 use pipeline::{Input, MAX_RES, Picture, SHRINK};
@@ -128,18 +130,34 @@ impl ModelRunner for InspyrenetRunner {
             ));
         }
         let backbone = self.backbone;
-        let pick = self.device;
-        let path = weights.to_path_buf();
-        let loaded = on_big_stack(move || {
-            let device = pick();
-            let net = weights::fill(InSPyReNet::with_backbone(backbone, &device), &path)?;
-            Ok(Network {
-                net: Box::new(net),
-                device,
-            })
-        })?;
-        Ok(Box::new(Loaded::new(Box::new(loaded))))
+        let device = (self.device)();
+        let on_card = device != processor();
+        let mut predict: Box<dyn Predict> = Box::new(load_network(backbone, weights, device)?);
+        if on_card {
+            let path = weights.to_path_buf();
+            predict = Box::new(WithFallback::new(
+                predict,
+                Box::new(move || {
+                    let network = load_network(backbone, &path, processor())?;
+                    Ok(Box::new(network) as Box<dyn Predict>)
+                }),
+            ));
+        }
+        Ok(Box::new(Loaded::new(predict)))
     }
+}
+
+/// Builds the network on `device` and fills it from the file at `path`, on a thread with a large
+/// stack.
+fn load_network(backbone: SwinConfig, path: &Path, device: Device) -> Result<Network, AiError> {
+    let path = path.to_path_buf();
+    on_big_stack(move || {
+        let net = weights::fill(InSPyReNet::with_backbone(backbone, &device), &path)?;
+        Ok(Network {
+            net: Box::new(net),
+            device,
+        })
+    })
 }
 
 /// The model id, from a literal that always parses.
@@ -151,7 +169,7 @@ fn model_id() -> ModelId {
 /// What the pipeline asks for a picture: the foreground probability of `input`, one value per
 /// pixel. The network answers it; tests give a stand-in, as the SAM 2.1 tests here do.
 trait Predict: Send {
-    fn predict(&self, input: &Input, ctx: &RunContext) -> Result<Vec<f32>, AiError>;
+    fn predict(&mut self, input: &Input, ctx: &RunContext) -> Result<Vec<f32>, AiError>;
 }
 
 /// InSPyReNet with its weights, on the device they were loaded to.
@@ -179,7 +197,7 @@ impl Network {
 
 impl Predict for Network {
     /// The network's foreground probability for `input`, one value per pixel.
-    fn predict(&self, input: &Input, ctx: &RunContext) -> Result<Vec<f32>, AiError> {
+    fn predict(&mut self, input: &Input, ctx: &RunContext) -> Result<Vec<f32>, AiError> {
         let ctx = ctx.clone();
         on_big_stack(|| {
             let cancelled = || ctx.is_cancelled();

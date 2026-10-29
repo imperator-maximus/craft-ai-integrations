@@ -1,6 +1,7 @@
 """be: the Burn engine's own rules (saved-weights loading, the panic guard, the answer checks, the
 file names it accepts), the catalogue route it is listed by, the binding's `.bpk` rule and the
-shared revision; for InSPyReNet, the complete-weights rule, the matte size and the picture size.
+shared revision; for InSPyReNet, the complete-weights rule, the matte size, the picture size and
+the move to the processor when the card fails.
 
 Not reached here, because they need the real model, a graphics card or a graph the converter
 panics on (the ignored live tests in `crates/ai-engine-burn/tests/live.rs` and
@@ -63,6 +64,15 @@ BE = [
         'if pred.len() != p.in_w * p.in_h {', 'if false {', 'a_wrong_answer_from_the_network'),
     lib('inspyrenet-picture-bytes-unchecked', 'inspyrenet/pipeline/mod.rs',
         '.filter(|n| picture.bytes.len() == n * 3)', '.filter(|_| true)', 'bad_and_empty_pictures'),
+    lib('inspyrenet-cancel-moves-to-processor', 'inspyrenet/fallback.rs',
+        'Err(error) if error.kind != ErrorKind::Cancelled => error,', 'Err(error) => error,',
+        'a_cancel_is_not_a_failure'),
+    lib('inspyrenet-never-moves-to-processor', 'inspyrenet/fallback.rs',
+        'let Some(rebuild) = self.rebuild.take() else {', 'let Some(rebuild) = None::<Rebuild> else {',
+        'moves_to_the_processor'),
+    lib('inspyrenet-processor-not-kept', 'inspyrenet/fallback.rs',
+        '        self.current = rebuild()?;\n        self.current.predict(input, ctx)',
+        '        rebuild()?.predict(input, ctx)', 'moves_to_the_processor'),
     ('burn-revision-bumped-in-the-architecture', B + 'model/mod.rs',
      'onnx-0.22.0-v1";', 'onnx-0.22.0-v2";', PKG, 'revision', 'the_architecture_and_the_saved'),
     ('burn-revision-bumped-in-the-cache-key', 'crates/ai-burn-setup/src/sam21.rs',

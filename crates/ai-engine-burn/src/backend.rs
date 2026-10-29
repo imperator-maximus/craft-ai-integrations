@@ -97,6 +97,11 @@ pub(crate) fn pick_device() -> Device {
     if !forced_processor && graphics_card_answers() {
         return WgpuDevice::default().into();
     }
+    processor()
+}
+
+/// The processor, through Burn's `ndarray` backend.
+pub(crate) fn processor() -> Device {
     #[allow(deprecated)]
     let cpu = NdArrayDevice::Cpu;
     cpu.into()
