@@ -117,6 +117,15 @@ against the author's own checkpoint, `ckpt_base.pth` (InSPyReNet Swin-B Plus Ult
 downloads. The author's file is not used directly because it is a pickle (`.pth`), and a local
 connection takes only `.safetensors`, `.onnx` or `.bpk` weights.
 
+### In the catalogue
+
+`remove-background` has one recipe, InSPyReNet (`crates/ai-features/src/catalogue/inspyrenet.rs`),
+and it is **built in only**: `LocalRecipe::comfyui` is false, so it is never a ComfyUI setup option,
+plan, install offer or connection, and engine advice does not offer ComfyUI for the tool. Its one
+route is `burn` / `inspyrenet` with the pinned file above in the folder `inspyrenet`, so Set up AI
+offers one 367 MB download, checked by size and SHA-256, and records that file on the connection.
+A node pack and a workflow would be far more to set up for one file and one tool.
+
 ### What was run
 
 On one Windows machine (i5-12600KF, RTX 3090 Ti), release:
@@ -130,9 +139,13 @@ On one Windows machine (i5-12600KF, RTX 3090 Ti), release:
 - **The whole runner on a real photo**, against the same port inside PhotoCraft (which runs it
   through the same pipeline): on a 3101 × 1613 PNG the two masks are identical, byte for byte. On a
   JPEG they differ by 0.003 on average (IoU 0.994), from the two JPEG decoders.
+- **Through the shared client** (`crates/ai-client/tests/burn_matte.rs`): the launcher sets up the
+  catalogue's built-in route with the real file, then two app ids ask `AiClient` for Remove
+  background only and each gets one grayscale mask at the picture's size (the 3101 × 1613 PNG). A
+  file that is not the checkpoint is refused in words that point to Set up AI.
 - Not measured cleanly: the time per picture. During these runs another program held about 20 GB of
   the card's memory and the PhotoCraft port slowed down just as much (about 20 s a picture instead
-  of about 2.5 s). No run on macOS or Linux, and no app has run it through the shared binding yet.
+  of about 2.5 s). No run on macOS or Linux, and no real app has mounted it yet.
 
 ```sh
 # The PyTorch reference, once (Python with torch, safetensors and transparent-background)
@@ -141,15 +154,16 @@ python tools/burn/inspyrenet_reference.py <inspyrenet.safetensors> <inspyrenet-r
 CRAFT_TEST_INSPYRENET_WEIGHTS=<inspyrenet.safetensors> CRAFT_TEST_INSPYRENET_REFERENCE=<inspyrenet-ref-384.safetensors>   cargo test --release -p craft-ai-engine-burn -j 8 --lib inspyrenet -- --include-ignored --nocapture
 # One photo through the runner, the mask written out
 CRAFT_TEST_INSPYRENET_WEIGHTS=<inspyrenet.safetensors> CRAFT_TEST_INSPYRENET_IMAGE=<photo> CRAFT_TEST_INSPYRENET_OUT=<mask.png>   cargo test --release -p craft-ai-engine-burn -j 8 --lib removes_the_background -- --ignored --nocapture
+# Two apps through the shared client, from the catalogue's route
+CRAFT_TEST_INSPYRENET_WEIGHTS=<inspyrenet.safetensors> CRAFT_TEST_INSPYRENET_IMAGE=<photo.png>   cargo test --release -p craft-ai-client --features burn --test burn_matte -- --ignored --nocapture
 python tools/mutation/mutation_check.py be inspyrenet
+python tools/mutation/mutation_check.py bo
 ```
 
 ### Limits to know
 
-- **No catalogue recipe yet.** `remove-background` still has no local recipe. A recipe here always
-  names a ComfyUI workflow, with built-in runtimes beside it; one that is built in only is a
-  catalogue question for the maintainers, so it is not guessed in this change. Until then the model
-  is reached through a local connection that names the weights file.
+- **Graphics card advice.** The route is not marked quick on the processor, so engine advice
+  calls it slow on a computer without a card the engine can use.
 - **The processor is slow.** The fallback runs on Burn's `ndarray` backend, which this crate
   builds without its `multi-threads` and `simd` features, so it uses one core. The same network on
   one core took about 230 s a picture in PhotoCraft (its `flex` backend), about 35 s with four
