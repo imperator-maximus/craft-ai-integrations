@@ -79,7 +79,10 @@ python tools/mutation/mutation_check.py be
 - SAM 2.1 tiny only. A different architecture needs its own generated code and runner.
 - Click and box prompts. A description stays on the ComfyUI route.
 - The processor fallback uses Burn's `ndarray` backend, which Burn has marked deprecated in favour
-  of `burn-flex`. Swap it once flex is measured.
+  of `burn-flex`. Swap it once flex is measured. It is built with Burn's `rayon` and `simd`
+  features: the crate turns Burn's default features off, and without these two the processor runs
+  on one core with scalar maths (3.7 times slower on the one network measured, see the pull request
+  that turned them on). The SAM 2.1 timings below were taken before that change.
 - `CRAFT_AI_BURN_DEVICE=cpu` forces the processor even when a graphics card answers. Run on the
   test PC (release, astronaut sample): one click and one box both gave IoU 1.0000 against rten
   (22.5 % selected by both). Timings on the processor: first run 8.70 s (rten 0.71 s), second

@@ -22,8 +22,10 @@ craft-ai-features = { path = "../ai-features", package = "craft-ai-features" }
 # The request handling (clicks, box, the picture kept between requests, the empty-mask answer),
 # picture decoding and resampling are engine-neutral and live there once.
 craft-ai-engine-rten = { path = "../ai-engine-rten", package = "craft-ai-engine-rten" }
-# `wgpu` reaches Vulkan, Metal and DirectX 12 cards; `ndarray` is the processor fallback.
-burn = { version = "=0.22.1", default-features = false, features = ["std", "ndarray", "wgpu"] }
+# `wgpu` reaches Vulkan, Metal and DirectX 12 cards; `ndarray` is the processor fallback. Without
+# `rayon` and `simd` (off with the default features) the processor fallback runs on one core with
+# scalar maths.
+burn = { version = "=0.22.1", default-features = false, features = ["std", "ndarray", "wgpu", "rayon", "simd"] }
 burn-store = "=0.22.1"
 craft-ai-burn-setup = { path = "../ai-burn-setup", package = "craft-ai-burn-setup", features = ["conversion"], optional = true }
 
