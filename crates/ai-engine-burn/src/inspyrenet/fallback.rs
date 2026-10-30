@@ -2,8 +2,9 @@
 //!
 //! A card can answer the engine's start-up probe and still fail on the network: on a build server
 //! a software renderer (lavapipe) did, while reading the answer back. So the first failure that is
-//! not a cancel builds the network again on the processor and runs that picture again there, and
-//! the model stays on the processor from then on.
+//! not a cancel builds the network again on the processor and runs that picture again there. Once
+//! that rebuild has worked the model stays on the processor. The move is tried once: if the rebuild
+//! fails, its error is the answer and later pictures go to the card again.
 
 use craft_ai_core::{AiError, ErrorKind};
 use craft_ai_engine::RunContext;

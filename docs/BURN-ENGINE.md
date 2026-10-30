@@ -173,8 +173,10 @@ python tools/mutation/mutation_check.py bo
 - **A software renderer counts as a card.** The engine takes the graphics card when one answers,
   and a software renderer (lavapipe, WARP) answers too. On CI the network was far slower there and
   failed on lavapipe. So the first failure on a card that is not a cancel builds the network again
-  on the processor from the same file, runs that picture again there with a notice, and stays on
-  the processor (`src/inspyrenet/fallback.rs`). SAM 2.1 on this engine makes the same choice of
+  on the processor from the same file and runs that picture again there with a notice. Once that
+  rebuild has worked, the model stays on the processor. The move is tried once: if the rebuild
+  fails, its error is the answer and later pictures go to the card again
+  (`src/inspyrenet/fallback.rs`). SAM 2.1 on this engine makes the same choice of
   device without that move. `CRAFT_AI_BURN_DEVICE=cpu` forces the processor from the start.
 - **The processor is slow.** The fallback runs on Burn's `ndarray` backend, which this crate
   builds without its `multi-threads` and `simd` features, so it uses one core. The same network on
