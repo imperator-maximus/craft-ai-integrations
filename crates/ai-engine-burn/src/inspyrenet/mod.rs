@@ -29,7 +29,7 @@ use craft_ai_engine_rten::picture::{decode_picture, encode_mask};
 use craft_ai_features::GpuVendor;
 
 use crate::backend::{pick_device, processor};
-use fallback::WithFallback;
+use fallback::{WithFallback, load_or_processor};
 use net::InSPyReNet;
 use net::swin::SwinConfig;
 use pipeline::{Input, MAX_RES, Picture, SHRINK};
@@ -131,8 +131,12 @@ impl ModelRunner for InspyrenetRunner {
         }
         let backbone = self.backbone;
         let device = (self.device)();
-        let on_card = device != processor();
-        let mut predict: Box<dyn Predict> = Box::new(load_network(backbone, weights, device)?);
+        let (network, on_card) = load_or_processor(
+            device != processor(),
+            || load_network(backbone, weights, device),
+            || load_network(backbone, weights, processor()),
+        )?;
+        let mut predict: Box<dyn Predict> = Box::new(network);
         if on_card {
             let path = weights.to_path_buf();
             predict = Box::new(WithFallback::new(

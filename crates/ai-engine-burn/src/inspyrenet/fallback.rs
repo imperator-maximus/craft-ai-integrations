@@ -12,6 +12,25 @@ use craft_ai_engine::RunContext;
 use super::Predict;
 use super::pipeline::Input;
 
+/// Loads the network with `card` when `on_card`, else with `processor` alone. A card load that
+/// fails for any reason but the file is retried with `processor`; a file that is not the checkpoint
+/// ([`ErrorKind::Unsupported`]) is refused at once instead of being read a second time. Returns the
+/// network and whether it is on the card.
+pub(super) fn load_or_processor<T>(
+    on_card: bool,
+    card: impl FnOnce() -> Result<T, AiError>,
+    processor: impl FnOnce() -> Result<T, AiError>,
+) -> Result<(T, bool), AiError> {
+    if !on_card {
+        return Ok((processor()?, false));
+    }
+    match card() {
+        Ok(network) => Ok((network, true)),
+        Err(error) if error.kind == ErrorKind::Unsupported => Err(error),
+        Err(_) => Ok((processor()?, false)),
+    }
+}
+
 /// Builds the network again on the processor. Called at most once.
 pub(super) type Rebuild = Box<dyn FnOnce() -> Result<Box<dyn Predict>, AiError> + Send>;
 
@@ -136,6 +155,67 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.kind, ErrorKind::Cancelled);
         assert_eq!((count(&card), count(&rebuilds)), (1, 0));
+    }
+
+    /// Loads that answer `Ok(name)` or fail with `kind`, recording which ran.
+    fn load(
+        name: &'static str,
+        fails: Option<ErrorKind>,
+        ran: &std::sync::Mutex<Vec<&'static str>>,
+    ) -> Result<&'static str, AiError> {
+        ran.lock().unwrap().push(name);
+        match fails {
+            Some(kind) => Err(AiError::new(kind, "failed")),
+            None => Ok(name),
+        }
+    }
+
+    #[test]
+    fn a_card_that_loads_keeps_the_network() {
+        let ran = std::sync::Mutex::new(Vec::new());
+        let got = load_or_processor(
+            true,
+            || load("card", None, &ran),
+            || load("cpu", None, &ran),
+        );
+        assert_eq!(got.unwrap(), ("card", true));
+        assert_eq!(*ran.lock().unwrap(), ["card"]);
+    }
+
+    #[test]
+    fn a_card_that_fails_to_load_loads_on_the_processor() {
+        let ran = std::sync::Mutex::new(Vec::new());
+        let got = load_or_processor(
+            true,
+            || load("card", Some(ErrorKind::Provider), &ran),
+            || load("cpu", None, &ran),
+        );
+        assert_eq!(got.unwrap(), ("cpu", false));
+        assert_eq!(*ran.lock().unwrap(), ["card", "cpu"]);
+    }
+
+    #[test]
+    fn a_file_that_is_not_the_checkpoint_is_not_read_twice() {
+        let ran = std::sync::Mutex::new(Vec::new());
+        let got = load_or_processor(
+            true,
+            || load("card", Some(ErrorKind::Unsupported), &ran),
+            || load("cpu", None, &ran),
+        );
+        assert_eq!(got.unwrap_err().kind, ErrorKind::Unsupported);
+        assert_eq!(*ran.lock().unwrap(), ["card"]);
+    }
+
+    #[test]
+    fn on_the_processor_there_is_one_load() {
+        let ran = std::sync::Mutex::new(Vec::new());
+        let got = load_or_processor(
+            false,
+            || load("card", None, &ran),
+            || load("cpu", Some(ErrorKind::Provider), &ran),
+        );
+        assert_eq!(got.unwrap_err().kind, ErrorKind::Provider);
+        assert_eq!(*ran.lock().unwrap(), ["cpu"]);
     }
 
     #[test]
