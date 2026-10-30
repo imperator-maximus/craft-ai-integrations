@@ -13,6 +13,7 @@ Case shape: name, file, old, new, package, target, test filter.
 """
 B = 'crates/ai-engine-burn/src/'
 PKG = 'craft-ai-engine-burn'
+FALLBACK = 'inspyrenet/fallback.rs'
 
 
 def lib(name, file, old, new, test):
@@ -64,19 +65,19 @@ BE = [
         'if pred.len() != p.in_w * p.in_h {', 'if false {', 'a_wrong_answer_from_the_network'),
     lib('inspyrenet-picture-bytes-unchecked', 'inspyrenet/pipeline/mod.rs',
         '.filter(|n| picture.bytes.len() == n * 3)', '.filter(|_| true)', 'bad_and_empty_pictures'),
-    lib('inspyrenet-cancel-moves-to-processor', 'inspyrenet/fallback.rs',
+    lib('inspyrenet-cancel-moves-to-processor', FALLBACK,
         'Err(error) if error.kind != ErrorKind::Cancelled => error,', 'Err(error) => error,',
         'a_cancel_is_not_a_failure'),
-    lib('inspyrenet-never-moves-to-processor', 'inspyrenet/fallback.rs',
+    lib('inspyrenet-never-moves-to-processor', FALLBACK,
         'let Some(rebuild) = self.rebuild.take() else {', 'let Some(rebuild) = None::<Rebuild> else {',
         'moves_to_the_processor'),
-    lib('inspyrenet-processor-not-kept', 'inspyrenet/fallback.rs',
+    lib('inspyrenet-processor-not-kept', FALLBACK,
         '        self.current = rebuild()?;\n        self.current.predict(input, ctx)',
         '        rebuild()?.predict(input, ctx)', 'moves_to_the_processor'),
-    lib('inspyrenet-card-load-not-retried', 'inspyrenet/fallback.rs',
+    lib('inspyrenet-card-load-not-retried', FALLBACK,
         'Err(_) => Ok((processor()?, false)),', 'Err(error) => Err(error),',
         'fails_to_load_loads_on_the_processor'),
-    lib('inspyrenet-bad-file-read-twice', 'inspyrenet/fallback.rs',
+    lib('inspyrenet-bad-file-read-twice', FALLBACK,
         'Err(error) if error.kind == ErrorKind::Unsupported => Err(error),',
         'Err(error) if false => Err(error),', 'not_read_twice'),
     ('burn-revision-bumped-in-the-architecture', B + 'model/mod.rs',

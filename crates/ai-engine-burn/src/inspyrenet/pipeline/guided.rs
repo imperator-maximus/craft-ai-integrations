@@ -20,7 +20,7 @@ fn in_parallel<T: Sync, R: Send>(
     work: &(dyn Fn(&T) -> Option<R> + Sync),
 ) -> Vec<Option<R>> {
     let threads = std::thread::available_parallelism()
-        .map_or(1, |n| n.get())
+        .map_or(1, std::num::NonZeroUsize::get)
         .clamp(1, 32);
     let per = items.len().div_ceil(threads).max(1);
     std::thread::scope(|scope| {
@@ -36,7 +36,7 @@ fn in_parallel<T: Sync, R: Send>(
             .collect();
         let mut out = Vec::with_capacity(items.len());
         for (len, handle) in handles {
-            match handle.map(|h| h.join()) {
+            match handle.map(std::thread::ScopedJoinHandle::join) {
                 Ok(Ok(part)) => out.extend(part),
                 _ => out.extend((0..len).map(|_| None)),
             }
